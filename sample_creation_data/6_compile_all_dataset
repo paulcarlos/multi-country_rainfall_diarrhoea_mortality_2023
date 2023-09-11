@@ -1,0 +1,52 @@
+library(lubridate)
+library(RcppRoll)
+library(reshape2)
+
+# import data
+mort <- readRDS("data/outc_dia/phl_dia-deaths_clim-cat_ts-daily_2006-2019.rds")
+pr <- readRDS("data/extracted_era5land/phl/pr_daily_era5land_2005_2020_phl_clim-cat.rds")
+t2m <- readRDS("data/extracted_era5land/phl/t2m_daily_era5land_2005_2020_phl_clim-cat.rds")
+kg <- read.csv("kp_class_beck2018.csv",sep=";",stringsAsFactors=FALSE)
+
+# loop by climate category
+ctry <- "phl"
+clim <- colnames(mort[,-1])
+dlist <- list()
+for (i in clim) {
+  cat1 <- i
+  dat <- data.frame("date"=mort$date,"day"=(1:length(mort$date))-1,"dow"=as.factor(lubridate::wday(mort$date)),
+                    "month"=lubridate::month(mort$date),"mort"=mort[,cat1],
+                    "t2m"=t2m[which(t2m$date%in%mort$date),cat1],"avpr"=pr[which(pr$date%in%mort$date),cat1])
+     
+  # temperature moving average
+  t28 <- roll_mean(dplyr::lag(t2m[,cat1],n=1),n=28L,fill=NA,align="right")
+  dat$t28 <- t28[t2m$date %in% dat$date]
+  
+  # rainfall variables
+  pr28 <- roll_sum(dplyr::lag(pr[,cat1],n=1),n=28L,fill=NA,align="right") 
+  dat$pr28 <- pr28[pr$date %in% dat$date] # prior rain 28 days rolling sums
+  
+  # stratum for Jan-Mar 
+  seas1 <- ifelse(dat$month%in%1:3,1,ifelse(dat$month%in%4:6,2,ifelse(dat$month%in%7:9,3,4)))
+  dat$str.3mo.1 <- as.factor(as.factor(lubridate::year(dat$date)):as.factor(seas1):as.factor(dat$dow))
+
+  # stratum for Feb-Apr
+  seas2 <- ifelse(dat$month%in%2:4,1,
+                  ifelse(dat$month%in%5:7,2,
+                         ifelse(dat$month%in%8:10,3,4)))
+  ind2 <- ifelse(dat$month==1,1,0)
+  yr2 <- year(dat$date)-ind2
+  dat$str.3mo.2 <- as.factor(as.factor(yr2):as.factor(seas2):as.factor(dat$dow))
+
+  # stratum for Mar-May
+  seas3 <- ifelse(dat$month%in%3:5,1,
+                  ifelse(dat$month%in%6:8,2,
+                         ifelse(dat$month%in%9:11,3,4)))
+  ind3 <- ifelse(dat$month%in%1:2,1,0)
+  yr3 <- year(dat$date)-ind3
+  dat$str.3mo.3 <- as.factor(as.factor(yr3):as.factor(seas3):as.factor(dat$dow))
+
+  # save in list
+  dlist[[paste0(ctry,".",cat1)]] <- dat
+}
+saveRDS(dlist,paste0("data/list_dataset/",ctry,"_list_clim-cat_era5-land.rds"))
