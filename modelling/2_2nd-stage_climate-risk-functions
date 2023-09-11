@@ -1,0 +1,188 @@
+library(splines)
+library(dlnm)
+library(mixmeta)
+library(lubridate)
+library(tsModel)
+library(ggplot2)
+library(cowplot)
+library(classInt)
+
+# call Wald function
+source("D:/R/functions/wald_test.R")
+
+# load data
+load("data/mod_out/model-out_1st-stage.rda")
+
+# meta-analysis all locations
+mtot1 <- mixmeta(formula=coef1~clim,random=~1|ctry,data=mtab,S=vcov1)
+
+
+
+##########################
+#### plot by climate #####
+
+# predict 
+clim <- data.frame("clim"=sort(unique(mtab$clim)))
+pred <- predict(mtot1,newdata=clim,vcov=T)
+names(pred) <- clim$clim
+cname <- c("Trop","Arid","Temp")
+
+# dataframe 
+val <- data.frame("clim1"=clim$clim,"clim2"=cname,"cen.val"=NA,"cen.pct"=NA,
+                  "p5.rain"=NA,"p5.mean"=NA,"p5.ci"=NA,
+                  "p95.rain"=NA,"p95.mean"=NA,"p95.ci"=NA) # store RRs for 5th and 95th pctile
+coln1 <- c("clim","rain","value","lower","upper")
+plt <- data.frame(matrix(0,nrow=0,ncol=length(coln1),dimnames=list(NULL,coln1))) # store RRs
+coln2 <- c("clim",paste0("p",sprintf("%02d",c(1,5,10,25,50,75,90,95,99))))
+p1 <- data.frame(matrix(0,nrow=length(cname),ncol=length(coln2),dimnames=list(seq(cname),coln2))); p1$clim=cname
+
+# save information into a dataframe
+#options("OutDec"="\u00b7") #midline dot
+byx <- 10
+for (i in seq(pred)) {
+  cat1 <- mtab$id[mtab$clim==names(pred)[i]]
+  # get rainfall
+  if (length(cat1)>1) {
+    slist <- dlist[cat1]
+    day1 <- unlist(lapply(slist,function(z)as.character(z$date)))
+    var <- unlist(lapply(slist,"[",paste0("pr",lag1)))
+    ag1 <- aggregate(var~day1,FUN="mean")
+    var1 <- ag1$var
+  } else {
+    slist <- dlist[[cat1]]
+    var1 <- slist[,paste0("pr",lag1)]
+  }
+  
+  # centre
+  pred1 <- pred[[i]]
+  predvar <- quantile(var1,0:90/100,na.rm=T)
+  argvar1 <- list(x=predvar,fun="ns",knots=quantile(var1,rkn,na.rm=T),Bound=range(var1,na.rm=T))
+  #argvar1 <- list(x=predvar,fun="ns",df=rkn,Bound=range(var1,na.rm=T))
+  bvar <- do.call(onebasis,argvar1)
+  cval <- round(predvar[which.min((bvar%*%pred1$fit))])
+  
+  # model
+  argvar <- list(x=var1,fun="ns",knots=quantile(var1,rkn,na.rm=T))
+  #argvar <- list(x=var1,fun="ns",df=rkn)
+  bvar <- do.call(onebasis,argvar)
+  cp <- crosspred(bvar,coef=pred1$fit,vcov=pred1$vcov,model.link="log",by=byx,cen=cval)
+  
+  # extract 5th and 95th percentile risks
+  p5 <- round(quantile(var1,0.05),-1); p95 <- round(quantile(var1,0.95),-1)
+  val$cen.val[i] <- cval; val$cen.pct[i] <- round(ecdf(var1)(cval)*100) # center value
+  val$p5.rain[i] <- p5
+  val$p5.mean[i] <- round((cp$allRRfit[as.character(p5)]-1)*100,1)
+  val$p5.ci[i] <- paste0(round((cp$allRRlow[as.character(p5)]-1)*100,1),"; ",round((cp$allRRhigh[as.character(p5)]-1)*100,1))
+  val$p95.rain[i] <- p95
+  val$p95.mean[i] <- round((cp$allRRfit[as.character(p95)]-1)*100,1)
+  val$p95.ci[i] <- paste0(round((cp$allRRlow[as.character(p95)]-1)*100,1),"; ",round((cp$allRRhigh[as.character(p95)]-1)*100,1))
+  
+  # dataframe for rain/predvar percentiles
+  p1[i,-1] <- round(quantile(var1,as.numeric(substr(colnames(p1)[-1],2,3))/100),-1)
+  
+  # dataframe (long format)
+  df1 <- data.frame("clim"=cname[i],"rain"=cp$predvar,"value"=cp$allRRfit,"lower"=cp$allRRlow,"upper"=cp$allRRhigh)
+  plt <- rbind(plt,df1)  
+}
+rm(i,cat1,slist,day1,var,var1,ag1,pred1,predvar,argvar1,bvar,argvar,cp,p5,p95)
+
+# save table of RRs
+write.csv(val,"tables/suppl_tab_clim_rr_centering.csv",row.names=F)
+saveRDS(plt,"data/rr_dataframe/rr_values_clim-cat.rds")
+
+
+####### ggplot #########
+
+y1 <- c(0.9,1.4)
+lab <- c("",5,"",25,50,75,"",95,"")
+mar <- c(0.1,0.03,0.1,0.1)
+msize <- 15
+xtext <- 9
+ytext <- 12
+atitle <- 13.5
+rr.col <- "black" # mean RR line  
+ci.col <- "gray70" # confidence intervals
+l1.col <- "gray40" # 1.00 RR
+pctl.col <- "darkblue"
+lab1 <- 3 # label size of pctl
+nbrk <- 4 # breaks of y axis
+
+tr <- plt[plt$clim=="Trop",]
+p.trop <- ggplot(data=tr,aes(x=rain,y=value,ymin=lower,ymax=upper)) +
+  geom_hline(yintercept=1,linewidth=1,color=l1.col) +
+  geom_ribbon(fill=ci.col,alpha=0.5) + 
+  geom_line(color=rr.col,linewidth=1) +
+  #scale_x_continuous(breaks=unlist(p1[p1$climate=="Tropical",-1]),labels=lab) +
+  scale_x_continuous(breaks=round(classIntervals(seq(min(tr$rain),max(tr$rain),10),
+                                                 n=nbrk,style="equal")[[2]],-1)) +
+  scale_y_continuous(n.breaks=6) +
+  geom_vline(xintercept=unlist(p1[p1$clim=="Trop",c("p05","p50","p95")]),
+             color=pctl.col,lwd=0.8,alpha=0.5) +
+  geom_label(aes(x=unlist(p1[p1$clim=="Trop",c("p05")]),y=1.35),label="5th",size=lab1) +
+  geom_label(aes(x=unlist(p1[p1$clim=="Trop",c("p50")]),y=1.35),label="50th",size=lab1) +
+  geom_label(aes(x=unlist(p1[p1$clim=="Trop",c("p95")]),y=1.35),label="95th",size=lab1) +
+  labs(title=paste0("Tropical (n=",length(grep(".A",mtab$id)),")"),
+       x="",y="RR (95%CI)") +
+  coord_cartesian(ylim=y1) +
+  theme_bw() +
+  theme(plot.title=element_text(size=15,hjust=0.5,face="bold"),
+        panel.grid.minor.x=element_blank(),
+        plot.margin=unit(mar,"cm"),
+        axis.text.x=element_text(size=xtext),
+        axis.text.y=element_text(size=ytext),
+        axis.title=element_text(size=atitle))
+#p.trop
+
+ar <- plt[plt$clim=="Arid",]
+p.arid <- ggplot(data=ar,aes(x=rain,y=value,ymin=lower,ymax=upper)) +
+  geom_hline(yintercept=1,linewidth=1) +
+  geom_ribbon(fill=ci.col,alpha=0.5) + 
+  geom_line(color=rr.col,linewidth=1) +
+  #scale_x_continuous(breaks=unlist(p1[p1$climate=="Arid",-1]),labels=lab) +
+  scale_x_continuous(breaks=round(classIntervals(seq(min(ar$rain),max(ar$rain),10),
+                                                 n=nbrk,style="equal")[[2]],-1)) +
+  scale_y_continuous(n.breaks=6) +
+  geom_vline(xintercept=unlist(p1[p1$clim=="Arid",c("p05","p50","p95")]),
+             color=pctl.col,lwd=0.8,alpha=0.5) +
+  geom_label(aes(x=unlist(p1[p1$clim=="Arid",c("p05")]),y=1.35),label="5th",size=lab1) +
+  geom_label(aes(x=unlist(p1[p1$clim=="Arid",c("p50")]),y=1.35),label="50th",size=lab1) +
+  geom_label(aes(x=unlist(p1[p1$clim=="Arid",c("p95")]),y=1.35),label="95th",size=lab1) +
+  labs(title=paste0("Arid (n=",length(grep(".B",mtab$id)),")"),x="28-day rain (mm)",y="") +
+  coord_cartesian(ylim=y1) +
+  theme_bw() +
+  theme(plot.title=element_text(size=15,hjust=0.5,face="bold"),
+        panel.grid.minor.x=element_blank(),
+        plot.margin=unit(mar,"cm"),
+        axis.text.x=element_text(size=xtext),
+        axis.text.y=element_text(size=ytext),
+        axis.title=element_text(size=atitle))
+#p.arid
+
+te <- plt[plt$clim=="Temp",]
+p.temp <- ggplot(data=te,aes(x=rain,y=value,ymin=lower,ymax=upper)) +
+  geom_hline(yintercept=1,linewidth=1) +
+  geom_ribbon(fill=ci.col,alpha=0.5) + 
+  geom_line(color=rr.col,linewidth=1) +
+  #scale_x_continuous(breaks=unlist(p1[p1$climate=="Temperate",-1]),labels=lab) +
+  scale_x_continuous(breaks=round(classIntervals(seq(min(te$rain),max(te$rain),10),
+                                                 n=nbrk,style="equal")[[2]],-1)) +
+  scale_y_continuous(n.breaks=6) +
+  geom_vline(xintercept=unlist(p1[p1$clim=="Temp",c("p05","p50","p95")]),
+             color=pctl.col,lwd=0.8,alpha=0.5) +
+  geom_label(aes(x=unlist(p1[p1$clim=="Temp",c("p05")]),y=1.35),label="5th",size=lab1) +
+  geom_label(aes(x=unlist(p1[p1$clim=="Temp",c("p50")]),y=1.35),label="50th",size=lab1) +
+  geom_label(aes(x=unlist(p1[p1$clim=="Temp",c("p95")]),y=1.35),label="95th",size=lab1) +
+  labs(title=paste0("Temperate (n=",length(grep(".C",mtab$id)),")"),x="",y="") +
+  coord_cartesian(ylim=y1) +
+  theme_bw() +
+  theme(plot.title=element_text(size=15,hjust=0.5,face="bold"),
+        panel.grid.minor.x=element_blank(),
+        plot.margin=unit(mar,"cm"),
+        axis.text.x=element_text(size=xtext),
+        axis.text.y=element_text(size=ytext),
+        axis.title=element_text(size=atitle))
+#p.temp
+
+mainplot <- plot_grid(p.trop,p.arid,p.temp,ncol=3)
+#mainplot
+save_plot("figures/main_fig_risk-functions_clim.png",mainplot,base_asp=3,base_height=4,base_width=10.5)
