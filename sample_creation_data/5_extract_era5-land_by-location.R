@@ -48,13 +48,25 @@ for (i in seq(fn1)) {
       df2 <- data.frame(matrix(NA,nrow=length(ctim),ncol=nrow(mat3)))
       wt1 <- NA
       for (k in 1:nrow(mat3)) {
-        df2[,k] <- var1[as.character(mat3$Var1[k]),as.character(mat3$Var2[k]),] 
+        sval1 <- var1[as.character(mat3$Var1[k]),as.character(mat3$Var2[k]),] # ACCUMULATED FROM Day 1 0H to Day 2 0H (25 hours)
+        sval2 <- tsModel::Lag(sval1,1) 
+        sval3 <- sval1-sval2 # subtract accumulation
+        sval4 <- sval3
+        sval4[hour(ctim)==1] <- sval1[hour(ctim)==1] - sval3[hour(ctim)==0] # 1H is corrected
+        sval4[2] <- sval1[2]
+        df2[,k] <- sval4 
         wt1[k] <- pop[as.character(mat3$Var1[k]),as.character(mat3$Var2[k])]
       }
       wt1[is.na(wt1)] <- 0
       df1[,1+j] <- apply(df2,1,weighted.mean,w=wt1,na.rm=T)
     } else {
-      df1[,1+j] <- var1[as.character(mat3$Var1),as.character(mat3$Var2),]
+      sval1 <- var1[as.character(mat3$Var1[k]),as.character(mat3$Var2[k]),]
+      sval2 <- tsModel::Lag(sval1,1)
+      sval3 <- sval1-sval2 # subtract accumulation
+      sval4 <- sval3
+      sval4[hour(ctim)==1] <- sval1[hour(ctim)==1] - sval3[hour(ctim)==0]
+      sval4[2] <- sval1[2]
+      df1[,1+j] <- sval4
     }
     #weightedMean(var1[,,1],w=mat2,na.rm=TRUE)
     #df1[,1+j] <- apply(var1,3,function(z)weightedMean(x=z,w=mat2,na.rm=TRUE))
